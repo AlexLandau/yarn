@@ -631,6 +631,7 @@ export default class Config {
     return null;
   }
 
+  // What calls this?
   async resolveWorkspaces(root: string, rootManifest: Manifest): Promise<WorkspacesManifestMap> {
     const workspaces = {};
     const patterns = rootManifest.workspaces || [];

@@ -77,6 +77,7 @@ export default (async function(
   }
 
   // if there's no readme field then load the README file from the cwd
+  // WHY???
   if (!info.readme) {
     const readmeCandidates = files
       .filter((filename): boolean => {

@@ -450,7 +450,7 @@ export default class PackageLinker {
   }
 
   resolvePeerModules() {
-    for (const pkg of this.resolver.getManifests()) {
+    for (const pkg of this.resolver.getManifests()) { // Go through all our (top-level?) dependencies
       const peerDeps = pkg.peerDependencies;
       if (!peerDeps) {
         continue;

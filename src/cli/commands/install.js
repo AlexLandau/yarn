@@ -208,6 +208,62 @@ export class Install {
   integrityChecker: InstallationIntegrityChecker;
   resolutionMap: ResolutionMap;
 
+
+
+  async getDependenciesFromManifest(projectManifestJson) {
+    const patterns = [];
+    const deps: DependencyRequestPatterns = [];
+    const ignorePatterns = [];
+    const usedPatterns = [];
+
+    const cwd =
+    this.flags.includeWorkspaceDeps || this.flags.workspaceRootIsCwd ? this.config.lockfileFolder : this.config.cwd;
+
+    for (const registry of Object.keys(registries)) {
+      const {filename} = registries[registry];
+      const loc = path.join(cwd, filename);
+      if (!await fs.exists(loc)) {
+        continue;
+      }
+
+      const pushDeps = (depType, manifest: Object, {hint, optional}, isUsed) => {
+        // We only take unused dependencies into consideration to get deterministic hoisting.
+        // Since flat mode doesn't care about hoisting and everything is top level and specified then we can safely
+        // leave these out.
+        if (this.flags.flat && !isUsed) {
+          return;
+        }
+        const depMap = manifest[depType];
+        for (const name in depMap) {
+          let pattern = name;
+          if (!this.lockfile.getLocked(pattern)) {
+            // when we use --save we save the dependency to the lockfile with just the name rather than the
+            // version combo
+            pattern += '@' + depMap[name];
+          }
+
+          // normalization made sure packages are mentioned only once
+          if (isUsed) {
+            usedPatterns.push(pattern);
+          } else {
+            ignorePatterns.push(pattern);
+          }
+
+          this.rootPatternsToOrigin[pattern] = depType;
+          patterns.push(pattern);
+          deps.push({pattern, registry, hint, optional, workspaceName: manifest.name, workspaceLoc: manifest._loc});
+        }
+      };
+
+      pushDeps('dependencies', projectManifestJson, {hint: null, optional: false}, true);
+      pushDeps('devDependencies', projectManifestJson, {hint: 'dev', optional: false}, !this.config.production);
+      pushDeps('optionalDependencies', projectManifestJson, {hint: 'optional', optional: true}, true);
+
+      break;
+    }
+    return deps;
+  }
+
   /**
    * Create a list of dependency requests from the current directories manifests.
    */
@@ -320,7 +376,10 @@ export class Install {
       pushDeps('devDependencies', projectManifestJson, {hint: 'dev', optional: false}, !this.config.production);
       pushDeps('optionalDependencies', projectManifestJson, {hint: 'optional', optional: true}, true);
 
+      // Looks relevant
+      // (fixing this is probably going to suck)
       if (this.config.workspaceRootFolder) {
+        console.log("There is a workspaceRootFolder");
         const workspaceLoc = cwdIsRoot ? loc : path.join(this.config.lockfileFolder, filename);
         const workspacesRoot = path.dirname(workspaceLoc);
 
@@ -331,11 +390,17 @@ export class Install {
           await normalizeManifest(workspaceManifestJson, workspacesRoot, this.config, true);
         }
 
+        // TODO: This does unnecessary loads of the READMEs... *facepalm*
         const workspaces = await this.config.resolveWorkspaces(workspacesRoot, workspaceManifestJson);
+        // console.log("workspaces: ", workspaces);
         workspaceLayout = new WorkspaceLayout(workspaces, this.config);
+        console.log("workspaceLayout: ", workspaceLayout);
+        // This is pretty important!
 
         // add virtual manifest that depends on all workspaces, this way package hoisters and resolvers will work fine
+        // TODO: This might NOT be what we want here...
         const workspaceDependencies = {...workspaceManifestJson.dependencies};
+        console.log("workspaceDependencies: ", workspaceDependencies);
         for (const workspaceName of Object.keys(workspaces)) {
           const workspaceManifest = workspaces[workspaceName].manifest;
           workspaceDependencies[workspaceName] = workspaceManifest.version;
@@ -347,25 +412,26 @@ export class Install {
             pushDeps('optionalDependencies', workspaceManifest, {hint: 'optional', optional: true}, true);
           }
         }
-        const virtualDependencyManifest: Manifest = {
-          _uid: '',
-          name: `workspace-aggregator-${uuid.v4()}`,
-          version: '1.0.0',
-          _registry: 'npm',
-          _loc: workspacesRoot,
-          dependencies: workspaceDependencies,
-          devDependencies: {...workspaceManifestJson.devDependencies},
-          optionalDependencies: {...workspaceManifestJson.optionalDependencies},
-        };
-        workspaceLayout.virtualManifestName = virtualDependencyManifest.name;
-        const virtualDep = {};
-        virtualDep[virtualDependencyManifest.name] = virtualDependencyManifest.version;
-        workspaces[virtualDependencyManifest.name] = {loc: workspacesRoot, manifest: virtualDependencyManifest};
+        // For hack week, don't include the fake project manifest
+        // const virtualDependencyManifest: Manifest = {
+        //   _uid: '',
+        //   name: `workspace-aggregator-${uuid.v4()}`,
+        //   version: '1.0.0',
+        //   _registry: 'npm',
+        //   _loc: workspacesRoot,
+        //   dependencies: workspaceDependencies,
+        //   devDependencies: {...workspaceManifestJson.devDependencies},
+        //   optionalDependencies: {...workspaceManifestJson.optionalDependencies},
+        // };
+        // workspaceLayout.virtualManifestName = virtualDependencyManifest.name;
+        // const virtualDep = {};
+        // virtualDep[virtualDependencyManifest.name] = virtualDependencyManifest.version;
+        // workspaces[virtualDependencyManifest.name] = {loc: workspacesRoot, manifest: virtualDependencyManifest};
 
-        // ensure dependencies that should be excluded are stripped from the correct manifest
-        stripExcluded(cwdIsRoot ? virtualDependencyManifest : workspaces[projectManifestJson.name].manifest);
+        // // ensure dependencies that should be excluded are stripped from the correct manifest
+        // stripExcluded(cwdIsRoot ? virtualDependencyManifest : workspaces[projectManifestJson.name].manifest);
 
-        pushDeps('workspaces', {workspaces: virtualDep}, {hint: 'workspaces', optional: false}, true);
+        // pushDeps('workspaces', {workspaces: virtualDep}, {hint: 'workspaces', optional: false}, true);
       }
 
       break;
@@ -375,6 +441,10 @@ export class Install {
     if (manifest.flat) {
       this.flags.flat = true;
     }
+
+    console.log("Patterns: ", patterns);
+    console.log("Deps: ", deps);
+    console.log("resolutionDeps: ", resolutionDeps);
 
     return {
       requests: [...resolutionDeps, ...deps],
@@ -478,6 +548,7 @@ export class Install {
    */
 
   async init(): Promise<Array<string>> {
+    console.log("Entering Install.init()");
     this.checkUpdate();
 
     // warn if we have a shrinkwrap
@@ -487,6 +558,8 @@ export class Install {
 
     let flattenedTopLevelPatterns: Array<string> = [];
     const steps: Array<(curr: number, total: number) => Promise<{bailout: boolean} | void>> = [];
+    // TODO: We're going to need to fix this to work differently (probably)
+    // We'll need some way to see... ___
     const {
       requests: depRequests,
       patterns: rawPatterns,
@@ -503,88 +576,177 @@ export class Install {
     }
 
     if (!this.flags.ignoreEngines && typeof manifest.engines === 'object') {
+      console.log("Adding a checkingManifest step");
       steps.push(async (curr: number, total: number) => {
         this.reporter.step(curr, total, this.reporter.lang('checkingManifest'), emoji.get('mag'));
         await compatibility.checkOne({_reference: {}, ...manifest}, this.config, this.flags.ignoreEngines);
       });
     }
 
-    steps.push(async (curr: number, total: number) => {
-      this.reporter.step(curr, total, this.reporter.lang('resolvingPackages'), emoji.get('mag'));
-      this.resolutionMap.setTopLevelPatterns(rawPatterns);
-      await this.resolver.init(this.prepareRequests(depRequests), {
-        isFlat: this.flags.flat,
-        isFrozen: this.flags.frozenLockfile,
-        workspaceLayout,
-      });
-      topLevelPatterns = this.preparePatterns(rawPatterns);
-      flattenedTopLevelPatterns = await this.flatten(topLevelPatterns);
-      return {bailout: await this.bailout(topLevelPatterns, workspaceLayout)};
-    });
+    // At this point, we have the workspaceLayout, so...
+    if (workspaceLayout != null) {
+      console.log("Doing alandau's hack week stuff instead of a normal yarn workspaces install");
 
-    steps.push(async (curr: number, total: number) => {
-      this.markIgnored(ignorePatterns);
-      this.reporter.step(curr, total, this.reporter.lang('fetchingPackages'), emoji.get('truck'));
-      const manifests: Array<Manifest> = await fetcher.fetch(this.resolver.getManifests(), this.config);
-      this.resolver.updateManifests(manifests);
-      await compatibility.check(this.resolver.getManifests(), this.config, this.flags.ignoreEngines);
-    });
+      // TODO: As best as possible, ignore the following variables...
+      // depRequests
+      // rawPatterns
+      // ignorePatterns
+      // manifest
+      console.log("depRequests: ", depRequests); // parsed dependencies for the root project, plus the fake workspace project
+      // console.log("rawPatterns: ", rawPatterns); // raw dependencies for the root project, plus the fake workspace project
+      // console.log("ignorePatterns: ", ignorePatterns); // This is empty for us
+      // console.log("manifest: ", manifest); // This is the package.json for the root project
 
-    steps.push(async (curr: number, total: number) => {
-      // remove integrity hash to make this operation atomic
-      await this.integrityChecker.removeIntegrityFile();
-      this.reporter.step(curr, total, this.reporter.lang('linkingDependencies'), emoji.get('link'));
-      await this.linker.init(flattenedTopLevelPatterns, workspaceLayout, {
-        linkDuplicates: this.flags.linkDuplicates,
-        ignoreOptional: this.flags.ignoreOptional,
-      });
-    });
 
-    steps.push(async (curr: number, total: number) => {
-      this.reporter.step(
-        curr,
-        total,
-        this.flags.force ? this.reporter.lang('rebuildingPackages') : this.reporter.lang('buildingFreshPackages'),
-        emoji.get('page_with_curl'),
-      );
-
-      if (this.flags.ignoreScripts) {
-        this.reporter.warn(this.reporter.lang('ignoredScripts'));
-      } else {
-        await this.scripts.init(flattenedTopLevelPatterns);
+      // console.log("workspaceLayout.workspaces: ", workspaceLayout.workspaces); // loc and manifest for everything... plus the fake stuff
+      // Can we map to the requests for each project?
+      const depRequestsByWorkspace = {};
+      const allDepRequests = [];
+      allDepRequests.push(...depRequests);
+      for (const workspaceName in workspaceLayout.workspaces) {
+        console.log("Dependencies for " + workspaceName + ":");
+        console.log("  deps: ", workspaceLayout.workspaces[workspaceName].manifest.dependencies);
+        console.log("  devDeps: ", workspaceLayout.workspaces[workspaceName].manifest.devDependencies);
+        console.log("  peerDeps: ", workspaceLayout.workspaces[workspaceName].manifest.peerDependencies);
+        const depRequestsInWorkspace = await this.getDependenciesFromManifest(workspaceLayout.workspaces[workspaceName].manifest);
+        console.log("Parsed dependencies: ", depRequestsInWorkspace);
+        depRequestsByWorkspace[workspaceName] = depRequestsInWorkspace;
+        allDepRequests.push(...depRequestsInWorkspace);
       }
-    });
+      console.log("depRequests: ", depRequests); // parsed dependencies for the root project, plus the fake workspace project
 
-    if (this.flags.har) {
+      // First step: What are all our workspace projects? (And presumably we also have the top-level thing to worry about)
       steps.push(async (curr: number, total: number) => {
-        const formattedDate = new Date().toISOString().replace(/:/g, '-');
-        const filename = `yarn-install_${formattedDate}.har`;
+        this.reporter.step(curr, total, "alandauResolvePackagesStep");
+        // TODO: Some deduplication here might be appropriate?
+        await this.resolver.init(this.prepareRequests(allDepRequests), {
+          isFlat: this.flags.flat,
+          isFrozen: this.flags.frozenLockfile,
+          workspaceLayout,
+        });
+        // Fine for hack week
+        return {bailout: false};
+      });
+
+      // Now we fetch, I guess?
+      steps.push(async (curr: number, total: number) => {
+        this.markIgnored(ignorePatterns);
+        this.reporter.step(curr, total, "alandauFetchPackagesStep");
+        console.log("About to get the manifests from this.resolver");
+        const manifests: Array<Manifest> = await fetcher.fetch(this.resolver.getManifests(), this.config);
+        this.resolver.updateManifests(manifests);
+        await compatibility.check(this.resolver.getManifests(), this.config, this.flags.ignoreEngines);
+      });
+
+      // And now we do the actual file system manipulation stuff
+      steps.push(async (curr: number, total: number) => {
+        // remove integrity hash to make this operation atomic
+        await this.integrityChecker.removeIntegrityFile();
+        this.reporter.step(curr, total, "alandauLinkingDependencies");
+        // This part is probably going to have to be overhauled
+        console.log("rawPatterns: ", rawPatterns);
+        topLevelPatterns = this.preparePatterns(rawPatterns);
+        console.log("topLevelPatterns: ", topLevelPatterns);
+        flattenedTopLevelPatterns = await this.flatten(topLevelPatterns);
+        // console.log("flattenedTopLevelPatterns: " + flattenedTopLevelPatterns);
+        console.log("flattenedTopLevelPatterns: ", flattenedTopLevelPatterns);
+        // await this.linker.init(flattenedTopLevelPatterns, workspaceLayout, {
+        //   linkDuplicates: this.flags.linkDuplicates,
+        //   ignoreOptional: this.flags.ignoreOptional,
+        // });
+      });
+
+    } else {
+      console.log("Adding a resolvingPackages step");
+      steps.push(async (curr: number, total: number) => {
+        this.reporter.step(curr, total, this.reporter.lang('resolvingPackages'), emoji.get('mag'));
+        this.resolutionMap.setTopLevelPatterns(rawPatterns);
+        await this.resolver.init(this.prepareRequests(depRequests), {
+          isFlat: this.flags.flat,
+          isFrozen: this.flags.frozenLockfile,
+          workspaceLayout,
+        });
+        console.log("rawPatterns: " + rawPatterns);
+        topLevelPatterns = this.preparePatterns(rawPatterns);
+        console.log("topLevelPatterns: " + topLevelPatterns);
+        flattenedTopLevelPatterns = await this.flatten(topLevelPatterns);
+        console.log("flattenedTopLevelPatterns: " + flattenedTopLevelPatterns);
+        return {bailout: await this.bailout(topLevelPatterns, workspaceLayout)};
+      });
+
+      console.log("Adding a fetchingPackages step");
+      steps.push(async (curr: number, total: number) => {
+        this.markIgnored(ignorePatterns);
+        this.reporter.step(curr, total, this.reporter.lang('fetchingPackages'), emoji.get('truck'));
+        console.log("About to get the manifests from this.resolver");
+        const manifests: Array<Manifest> = await fetcher.fetch(this.resolver.getManifests(), this.config);
+        this.resolver.updateManifests(manifests);
+        await compatibility.check(this.resolver.getManifests(), this.config, this.flags.ignoreEngines);
+      });
+
+      console.log("Adding a linkingDependencies step");
+      steps.push(async (curr: number, total: number) => {
+        // remove integrity hash to make this operation atomic
+        await this.integrityChecker.removeIntegrityFile();
+        this.reporter.step(curr, total, this.reporter.lang('linkingDependencies'), emoji.get('link'));
+        await this.linker.init(flattenedTopLevelPatterns, workspaceLayout, {
+          linkDuplicates: this.flags.linkDuplicates,
+          ignoreOptional: this.flags.ignoreOptional,
+        });
+      });
+
+      console.log("Adding a rebuildingPackages/buildingFreshPackages step");
+      steps.push(async (curr: number, total: number) => {
         this.reporter.step(
           curr,
           total,
-          this.reporter.lang('savingHar', filename),
-          emoji.get('black_circle_for_record'),
+          this.flags.force ? this.reporter.lang('rebuildingPackages') : this.reporter.lang('buildingFreshPackages'),
+          emoji.get('page_with_curl'),
         );
-        await this.config.requestManager.saveHar(filename);
+
+        if (this.flags.ignoreScripts) {
+          this.reporter.warn(this.reporter.lang('ignoredScripts'));
+        } else {
+          await this.scripts.init(flattenedTopLevelPatterns);
+        }
       });
+
+      if (this.flags.har) {
+        console.log("Adding a savingHar (?) step");
+        steps.push(async (curr: number, total: number) => {
+          const formattedDate = new Date().toISOString().replace(/:/g, '-');
+          const filename = `yarn-install_${formattedDate}.har`;
+          this.reporter.step(
+            curr,
+            total,
+            this.reporter.lang('savingHar', filename),
+            emoji.get('black_circle_for_record'),
+          );
+          await this.config.requestManager.saveHar(filename);
+        });
+      }
+
+      if (await this.shouldClean()) {
+        console.log("Adding a cleaningModules step");
+        steps.push(async (curr: number, total: number) => {
+          this.reporter.step(curr, total, this.reporter.lang('cleaningModules'), emoji.get('recycle'));
+          await clean(this.config, this.reporter);
+        });
+      }
     }
 
-    if (await this.shouldClean()) {
-      steps.push(async (curr: number, total: number) => {
-        this.reporter.step(curr, total, this.reporter.lang('cleaningModules'), emoji.get('recycle'));
-        await clean(this.config, this.reporter);
-      });
-    }
-
+    console.log("About to step through the steps");
     let currentStep = 0;
     for (const step of steps) {
       const stepResult = await step(++currentStep, steps.length);
+      console.log("Ran step " + currentStep);
       if (stepResult && stepResult.bailout) {
         this.maybeOutputUpdate();
         return flattenedTopLevelPatterns;
       }
     }
 
+    console.log("Done with the steps");
     // fin!
     // The second condition is to make sure lockfile can be updated when running `remove` command.
     if (
@@ -945,6 +1107,7 @@ export async function install(config: Config, reporter: Reporter, flags: Object,
 export async function run(config: Config, reporter: Reporter, flags: Object, args: Array<string>): Promise<void> {
   let lockfile;
   let error = 'installCommandRenamed';
+  console.log("Just entered run() in install.js");
   if (flags.lockfile === false) {
     lockfile = new Lockfile();
   } else {
@@ -977,6 +1140,7 @@ export async function run(config: Config, reporter: Reporter, flags: Object, arg
     throw new MessageError(reporter.lang(error, `yarn ${command} ${exampleArgs.join(' ')}`));
   }
 
+  console.log("About to call the install.install() function");
   await install(config, reporter, flags, lockfile);
 }
 

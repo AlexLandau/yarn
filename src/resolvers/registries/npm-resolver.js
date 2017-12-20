@@ -80,17 +80,21 @@ export default class NpmResolver extends RegistryResolver {
 
   async resolveRequest(): Promise<?Manifest> {
     if (this.config.offline) {
+      console.log("Offline responses are enabled");
       const res = await this.resolveRequestOffline();
       if (res != null) {
         return res;
       }
     }
 
+    // this is the thing where we actually make a network request
     const body = await this.config.registries.npm.request(NpmRegistry.escapeName(this.name));
 
     if (body) {
+      console.log("Response body: ", body);
       return NpmResolver.findVersionInRegistryResponse(this.config, this.range, body, this.request);
     } else {
+      console.log("Failed to get a response body");
       return null;
     }
   }
@@ -172,10 +176,12 @@ export default class NpmResolver extends RegistryResolver {
     }
   }
 
+  // This is entered from package-request.js
   async resolve(): Promise<Manifest> {
     // lockfile
     const shrunk = this.request.getLocked('tarball');
     if (shrunk) {
+      console.info("Returning 'shrunk' info: ", shrunk);
       return shrunk;
     }
 

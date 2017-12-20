@@ -109,7 +109,7 @@ export default class PackageRequest {
 
     const Resolver = this.getRegistryResolver();
     const resolver = new Resolver(this, name, range);
-    return resolver.resolve();
+    return resolver.resolve(); // in npm-resolver.js
   }
 
   /**
@@ -169,6 +169,7 @@ export default class PackageRequest {
     if (exoticResolver) {
       return this.findExoticVersionInfo(exoticResolver, this.pattern);
     } else if (WorkspaceResolver.isWorkspace(this.pattern, this.resolver.workspaceLayout)) {
+      // More workspace-specific stuff...
       invariant(this.resolver.workspaceLayout, 'expected workspaceLayout');
       const resolver = new WorkspaceResolver(this, this.pattern, this.resolver.workspaceLayout);
       return resolver.resolve();

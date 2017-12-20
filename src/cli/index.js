@@ -61,6 +61,7 @@ export function main({
 }) {
   loudRejection();
   handleSignals();
+  console.log("Start of main()");
 
   // set global options
   commander.version(version, '-v, --version');
@@ -138,6 +139,7 @@ export function main({
     preCommandArgs = args;
     args = [];
   }
+  console.log("commandName: " + commandName);
 
   let isKnownCommand = Object.prototype.hasOwnProperty.call(commands, commandName);
   const isHelp = arg => arg === '--help' || arg === '-h';
@@ -252,6 +254,7 @@ export function main({
       reporter.warn(reporter.lang('dashDashDeprecation'));
     }
 
+    console.log("About to run command.run");
     return command.run(config, reporter, commander, commander.args).then(exitCode => {
       if (shouldWrapOutput) {
         reporter.footer(false);
@@ -576,6 +579,7 @@ async function start(): Promise<void> {
     const args = process.argv.slice(2, doubleDashIndex === -1 ? process.argv.length : doubleDashIndex);
     const endArgs = doubleDashIndex === -1 ? [] : process.argv.slice(doubleDashIndex);
 
+    console.log("Logging in start()");
     main({startArgs, args, endArgs});
   }
 }

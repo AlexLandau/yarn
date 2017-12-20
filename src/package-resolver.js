@@ -45,6 +45,7 @@ export default class PackageResolver {
 
   frozen: boolean;
 
+  // This is only here so external stuff can grab it. *facepalm*
   workspaceLayout: ?WorkspaceLayout;
 
   resolutionMap: ResolutionMap;
@@ -270,6 +271,7 @@ export default class PackageResolver {
       seen.add(info);
     }
 
+    // console.info("Resolver manifests: ", infos);
     return infos;
   }
 
@@ -481,17 +483,19 @@ export default class PackageResolver {
   /**
    * TODO description
    */
-
+  // Note: If we go through to the end of this function, we make a network request to the npm repo to check the current value
   async find(initialReq: DependencyRequestPattern): Promise<void> {
     const req = this.resolveToResolution(initialReq);
 
     // we've already resolved it with a resolution
     if (!req) {
+      console.log("Already resolved with a resolution: ", req.pattern)
       return;
     }
 
     const fetchKey = `${req.registry}:${req.pattern}:${String(req.optional)}`;
     if (this.fetchingPatterns.has(fetchKey)) {
+      console.log("We are already in the process of fetching ", req.pattern);
       return;
     }
     this.fetchingPatterns.add(fetchKey);
@@ -516,6 +520,7 @@ export default class PackageResolver {
       fresh = true;
     }
 
+    console.log("Making an npm repo request (fresh="+fresh+") for ", req.pattern);
     const request = new PackageRequest(req, this);
     await request.find({fresh, frozen: this.frozen});
   }
