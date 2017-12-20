@@ -28,6 +28,7 @@ import {version as YARN_VERSION, getInstallationMethod} from '../../util/yarn-ve
 import WorkspaceLayout from '../../workspace-layout.js';
 import ResolutionMap from '../../resolution-map.js';
 import guessName from '../../util/guess-name';
+import PackageHoister from '../../package-hoister.js';
 
 const emoji = require('node-emoji');
 const invariant = require('invariant');
@@ -261,7 +262,7 @@ export class Install {
 
       break;
     }
-    return deps;
+    return {patterns, deps};
   }
 
   /**
@@ -570,6 +571,7 @@ export class Install {
     let topLevelPatterns: Array<string> = [];
 
     const artifacts = await this.integrityChecker.getArtifacts();
+    // console.log("Artifacts: ", artifacts);
     if (artifacts) {
       this.linker.setArtifacts(artifacts);
       this.scripts.setArtifacts(artifacts);
@@ -601,6 +603,7 @@ export class Install {
       // console.log("workspaceLayout.workspaces: ", workspaceLayout.workspaces); // loc and manifest for everything... plus the fake stuff
       // Can we map to the requests for each project?
       const depRequestsByWorkspace = {};
+      const patternsByWorkspace = {};
       const allDepRequests = [];
       allDepRequests.push(...depRequests);
       for (const workspaceName in workspaceLayout.workspaces) {
@@ -608,9 +611,12 @@ export class Install {
         console.log("  deps: ", workspaceLayout.workspaces[workspaceName].manifest.dependencies);
         console.log("  devDeps: ", workspaceLayout.workspaces[workspaceName].manifest.devDependencies);
         console.log("  peerDeps: ", workspaceLayout.workspaces[workspaceName].manifest.peerDependencies);
-        const depRequestsInWorkspace = await this.getDependenciesFromManifest(workspaceLayout.workspaces[workspaceName].manifest);
+        const foo /*depRequestsInWorkspace*/ = await this.getDependenciesFromManifest(workspaceLayout.workspaces[workspaceName].manifest);
+        const depRequestsInWorkspace = foo.deps;
+        const patternsInWorkspace = foo.patterns;
         console.log("Parsed dependencies: ", depRequestsInWorkspace);
         depRequestsByWorkspace[workspaceName] = depRequestsInWorkspace;
+        patternsByWorkspace[workspaceName] = patternsInWorkspace;
         allDepRequests.push(...depRequestsInWorkspace);
       }
       console.log("depRequests: ", depRequests); // parsed dependencies for the root project, plus the fake workspace project
@@ -650,6 +656,65 @@ export class Install {
         flattenedTopLevelPatterns = await this.flatten(topLevelPatterns);
         // console.log("flattenedTopLevelPatterns: " + flattenedTopLevelPatterns);
         console.log("flattenedTopLevelPatterns: ", flattenedTopLevelPatterns);
+        // Now is where the linker would run...
+
+        console.log("So what does the 'flat hoisted tree' look like for flattenedTopLevelPatterns?");
+        // So why does this know stuff already?
+        // It knows the Resolver, is that the problem?
+
+        // const flatHoistedTree: HoistManifestTuples = this.linker.getFlatHoistedTree(flattenedTopLevelPatterns, {ignoreOptional: this.flags.ignoreOptional});
+        const hoister = new PackageHoister(this.config, this.resolver, {ignoreOptional: this.flags.ignoreOptional});
+        hoister.seed(flattenedTopLevelPatterns);
+        const flatHoistedTree: HoistManifestTuples =  hoister.init();
+
+        // console.log("flatHoistedTree: ", flatHoistedTree);
+        console.log("flatHoistedTree:");
+        for (const item of flatHoistedTree) {
+          const location: String = item[0];
+          const hoistManifest: HoistManifest = item[1];
+          console.log(location, ": ", hoistManifest.originalKey, " -> ", hoistManifest.key);
+          // console.log(item);
+        }
+        const interWorkspaceDeps = {};
+        // (and can we get it for other packages?)
+        for (const workspaceName in workspaceLayout.workspaces) {
+          interWorkspaceDeps[workspaceName] = []; // TODO: Maybe this should be a Set instead
+          // TODO: Probably modify the config to get the destination path right?
+          const workspaceHoister = new PackageHoister(this.config, this.resolver, {ignoreOptional: this.flags.ignoreOptional});
+          // TODO: Get a valid input here
+          const wsRawPatterns = patternsByWorkspace[workspaceName];
+          const wsTopLevelPatterns = this.preparePatterns(wsRawPatterns);
+          // console.log("wsTopLevelPatterns: ", wsTopLevelPatterns);
+          const wsFlattenedTopLevelPatternsTmp = await this.flatten(wsTopLevelPatterns);
+          const depsToRemove = [];
+          for (const dep of wsFlattenedTopLevelPatternsTmp) {
+            const atIndex = dep.lastIndexOf('@');
+            const depNameWithoutVersion = dep.substring(0, atIndex);
+            // console.log(depNameWithoutVersion);
+            if (depNameWithoutVersion in workspaceLayout.workspaces) {
+              // console.log("  (is a workspace)");
+              interWorkspaceDeps[workspaceName].push(depNameWithoutVersion);
+              depsToRemove.push(dep);
+            }
+          }
+          const wsFlattenedTopLevelPatterns = wsFlattenedTopLevelPatternsTmp.filter((value: String) => depsToRemove.indexOf(value) === -1);
+          // console.log("wsFlattenedTopLevelPatterns: ", wsFlattenedTopLevelPatterns);
+          // TODO: We probably want to exclude our other workspace projects here, pre-hoisting...
+          workspaceHoister.seed(wsFlattenedTopLevelPatterns);
+          const workspaceFlatHoistedTree: HoistManifestTuples = workspaceHoister.init();
+
+          console.log("flatHoistedTree for ", workspaceName, " has ", workspaceFlatHoistedTree.length, " entries");
+          for (const item of workspaceFlatHoistedTree) {
+            const location: String = item[0];
+            const hoistManifest: HoistManifest = item[1];
+            // console.log(location, ": ", hoistManifest.originalKey, " -> ", hoistManifest.key);
+            // console.log(item);
+          }
+        }
+
+        // TODO: And here we can start turning those things on their head to figure out a small number of shared dependencies
+        // to use per project
+
         // await this.linker.init(flattenedTopLevelPatterns, workspaceLayout, {
         //   linkDuplicates: this.flags.linkDuplicates,
         //   ignoreOptional: this.flags.ignoreOptional,

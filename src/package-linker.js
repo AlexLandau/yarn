@@ -151,6 +151,7 @@ export default class PackageLinker {
     workspaceLayout?: WorkspaceLayout,
     {linkDuplicates, ignoreOptional}: {linkDuplicates: ?boolean, ignoreOptional: ?boolean} = {},
   ): Promise<void> {
+    // So what does this do?
     let flatTree = this.getFlatHoistedTree(patterns, {ignoreOptional});
     // sorted tree makes file creation and copying not to interfere with each other
     flatTree = flatTree.sort(function(dep1, dep2): number {
@@ -451,7 +452,7 @@ export default class PackageLinker {
 
   resolvePeerModules() {
     for (const pkg of this.resolver.getManifests()) { // Go through all our (top-level?) dependencies
-      const peerDeps = pkg.peerDependencies;
+      const peerDeps = pkg.peerDependencies; // Find the peer deps in that package
       if (!peerDeps) {
         continue;
       }
