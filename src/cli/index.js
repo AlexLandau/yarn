@@ -444,6 +444,7 @@ export function main({
     const errorReportLoc = writeErrorReport(log);
 
     reporter.error(reporter.lang('unexpectedError', err.message));
+    console.error(err);
 
     if (errorReportLoc) {
       reporter.info(reporter.lang('bugReport', errorReportLoc));

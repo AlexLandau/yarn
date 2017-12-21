@@ -677,10 +677,9 @@ export class Install {
           // console.log(item);
         }
         const interWorkspaceDeps = {};
+
         const workspaceFlatHoistedTrees = {};
-        const depFolderToHoistManifestsPerWorkspace = {};
-        const allTopLevelDepFolders = new Set();
-        // (and can we get it for other packages?)
+        workspaceFlatHoistedTrees[""] = rootFlatHoistedTree;
         for (const workspaceName in workspaceLayout.workspaces) {
           interWorkspaceDeps[workspaceName] = []; // TODO: Maybe this should be a Set instead
           // TODO: Probably modify the config to get the destination path right?
@@ -703,11 +702,15 @@ export class Install {
           }
           const wsFlattenedTopLevelPatterns = wsFlattenedTopLevelPatternsTmp.filter((value: String) => depsToRemove.indexOf(value) === -1);
           // console.log("wsFlattenedTopLevelPatterns: ", wsFlattenedTopLevelPatterns);
-          // TODO: We probably want to exclude our other workspace projects here, pre-hoisting...
           workspaceHoister.seed(wsFlattenedTopLevelPatterns);
           const workspaceFlatHoistedTree: HoistManifestTuples = workspaceHoister.init();
           workspaceFlatHoistedTrees[workspaceName] = workspaceFlatHoistedTree;
+        }
+        const depFolderToHoistManifestsPerWorkspace = {};
+        const allTopLevelDepFolders = new Set();
 
+        for (const workspaceName in workspaceFlatHoistedTrees) { // Includes the root (""), unlike the previous loop
+          const workspaceFlatHoistedTree = workspaceFlatHoistedTrees[workspaceName];
           console.log("flatHoistedTree for ", workspaceName, " has ", workspaceFlatHoistedTree.length, " entries");
           const depFolderToHoistManifests = {};
           for (const item of workspaceFlatHoistedTree) {
@@ -792,7 +795,7 @@ export class Install {
             }
 
             for (const projectName of projectsUsingThis) {
-              const projectLoc = workspaceLayout.getWorkspaceManifest(projectName).loc;
+              const projectLoc = projectName === "" ? workspaceLayout.config.cwd : workspaceLayout.getWorkspaceManifest(projectName).loc;
               const depFolderName = depFolderType.slice(0, depFolderType.indexOf(":"));
               const symlinkLocation = projectLoc + "/node_modules/" + depFolderName;
               const symlinkTarget = topLevelPath;
@@ -808,7 +811,8 @@ export class Install {
             console.log("Should be copying directly into ", projectsUsingThis[0], " for ", depFolderType);
             console.log("  Original location(s) might be:");
             const projectName = projectsUsingThis[0];
-            const projectLoc = workspaceLayout.getWorkspaceManifest(projectName).loc;
+            // const projectLoc = workspaceLayout.getWorkspaceManifest(projectName).loc;
+            const projectLoc = projectName === "" ? workspaceLayout.config.cwd : workspaceLayout.getWorkspaceManifest(projectName).loc;
 
             for (const hoistManifest of hoistManifests) {
               const copySrc = hoistManifest.loc;
