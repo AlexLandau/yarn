@@ -29,6 +29,7 @@ import WorkspaceLayout from '../../workspace-layout.js';
 import ResolutionMap from '../../resolution-map.js';
 import guessName from '../../util/guess-name';
 import PackageHoister from '../../package-hoister.js';
+import { hash } from '../../util/crypto';
 
 const emoji = require('node-emoji');
 const invariant = require('invariant');
@@ -663,19 +664,22 @@ export class Install {
         // It knows the Resolver, is that the problem?
 
         // const flatHoistedTree: HoistManifestTuples = this.linker.getFlatHoistedTree(flattenedTopLevelPatterns, {ignoreOptional: this.flags.ignoreOptional});
-        const hoister = new PackageHoister(this.config, this.resolver, {ignoreOptional: this.flags.ignoreOptional});
-        hoister.seed(flattenedTopLevelPatterns);
-        const flatHoistedTree: HoistManifestTuples =  hoister.init();
+        const rootHoister = new PackageHoister(this.config, this.resolver, {ignoreOptional: this.flags.ignoreOptional});
+        rootHoister.seed(flattenedTopLevelPatterns);
+        const rootFlatHoistedTree: HoistManifestTuples =  rootHoister.init();
 
         // console.log("flatHoistedTree: ", flatHoistedTree);
         console.log("flatHoistedTree:");
-        for (const item of flatHoistedTree) {
+        for (const item of rootFlatHoistedTree) {
           const location: String = item[0];
           const hoistManifest: HoistManifest = item[1];
           console.log(location, ": ", hoistManifest.originalKey, " -> ", hoistManifest.key);
           // console.log(item);
         }
         const interWorkspaceDeps = {};
+        const workspaceFlatHoistedTrees = {};
+        const depFolderToHoistManifestsPerWorkspace = {};
+        const allTopLevelDepFolders = new Set();
         // (and can we get it for other packages?)
         for (const workspaceName in workspaceLayout.workspaces) {
           interWorkspaceDeps[workspaceName] = []; // TODO: Maybe this should be a Set instead
@@ -702,18 +706,136 @@ export class Install {
           // TODO: We probably want to exclude our other workspace projects here, pre-hoisting...
           workspaceHoister.seed(wsFlattenedTopLevelPatterns);
           const workspaceFlatHoistedTree: HoistManifestTuples = workspaceHoister.init();
+          workspaceFlatHoistedTrees[workspaceName] = workspaceFlatHoistedTree;
 
           console.log("flatHoistedTree for ", workspaceName, " has ", workspaceFlatHoistedTree.length, " entries");
+          const depFolderToHoistManifests = {};
           for (const item of workspaceFlatHoistedTree) {
             const location: String = item[0];
             const hoistManifest: HoistManifest = item[1];
             // console.log(location, ": ", hoistManifest.originalKey, " -> ", hoistManifest.key);
             // console.log(item);
+            const firstPart = hoistManifest.parts[0];
+            if (depFolderToHoistManifests[firstPart] === undefined) {
+              depFolderToHoistManifests[firstPart] = [];
+              allTopLevelDepFolders.add(firstPart);
+            }
+            depFolderToHoistManifests[firstPart].push(hoistManifest);
+          }
+          // for (const topLevelDep in depFolderToHoistManifests) {
+          //   console.log(topLevelDep, ": ", depFolderToHoistManifests[topLevelDep]);
+          // }
+          depFolderToHoistManifestsPerWorkspace[workspaceName] = depFolderToHoistManifests;
+          // Let's try aggregating these into things...
+        }
+
+        console.log("Now the aggregated bits...");
+        // Just checking...
+        const allTopLevelDepFoldersSorted = [];
+        allTopLevelDepFolders.forEach((value) => allTopLevelDepFoldersSorted.push(value));
+        allTopLevelDepFoldersSorted.sort();
+        const projectsUsingDepFolderType = {};
+        // TODO: The other thing we'll need here is a link from the "dep folder type" to a list of HoistManifests or w/e defining
+        // the sources of the stuff to copy around
+        const hoistManifestsByDepFolderType = {};
+        for (const topLevelDep of allTopLevelDepFoldersSorted) {
+          console.log("  ", topLevelDep);
+          for (const workspaceName in depFolderToHoistManifestsPerWorkspace) {
+            const manifests = depFolderToHoistManifestsPerWorkspace[workspaceName][topLevelDep];
+            if (manifests !== undefined) {
+              // TODO: Strictly speaking, we should probably sort contents (using a canonical string comparator) before
+              // toString(), but so far I'm seeing things have a consistent sorting, probably thanks to undocumented and
+              // non-guaranteed behavior of other components. Good enough for hack week
+              // hoistManifest.key + ":" + hoistManifest.pkg.version
+              const depFolderType = manifests.map((hoistManifest: HoistManifest) => hoistManifest.key + ":" + hoistManifest.pkg.version).toString();
+              console.log("    ", depFolderType, ":", workspaceName);
+              if (projectsUsingDepFolderType[depFolderType] === undefined) {
+                projectsUsingDepFolderType[depFolderType] = [];
+              }
+              projectsUsingDepFolderType[depFolderType].push(workspaceName);
+              if (hoistManifestsByDepFolderType[depFolderType] === undefined) {
+                hoistManifestsByDepFolderType[depFolderType] = manifests;
+              }
+            }
           }
         }
 
+        console.log("Projects using dep folder type:");
+        console.log(projectsUsingDepFolderType);
+
+        console.log("The root project directory is " + workspaceLayout.config.cwd);
+        const sharedModulesPath = workspaceLayout.config.cwd + "/shared_modules";
+        fs.mkdirp(sharedModulesPath);
+        const copyQueue = [];
+        for (const depFolderType in projectsUsingDepFolderType) {
+          const projectsUsingThis = projectsUsingDepFolderType[depFolderType];
+          const hoistManifests = hoistManifestsByDepFolderType[depFolderType];
+          if (projectsUsingThis.length > 1) {
+            // Put in the shared folder, add symlinks
+            console.log("Should be creating shared folder for ", projectsUsingThis.length, " projects for ", depFolderType);
+            const hashMaybe = hash(depFolderType);
+            console.log("  Possible hash: ", hashMaybe);
+            const topLevelPath = sharedModulesPath + "/" + hashMaybe;
+            fs.mkdirp(topLevelPath);
+            console.log("  Original location(s) might be:");
+            for (const hoistManifest of hoistManifests) {
+              const copySrc = hoistManifest.loc;
+              console.log("    ", copySrc);
+              // console.log("   full hoist manifest: ", hoistManifest);
+              let copyDest = topLevelPath;
+              for (const part of hoistManifest.parts.slice(1)) {
+                copyDest = copyDest + "/node_modules/" + part;
+              }
+              console.log("    copy to: ", copyDest);
+              // await fs.copy(copySrc, copyDest, this.config.reporter);
+              copyQueue.push({src: copySrc, dest: copyDest});
+            }
+
+            for (const projectName of projectsUsingThis) {
+              const projectLoc = workspaceLayout.getWorkspaceManifest(projectName).loc;
+              const depFolderName = depFolderType.slice(0, depFolderType.indexOf(":"));
+              const symlinkLocation = projectLoc + "/node_modules/" + depFolderName;
+              const symlinkTarget = topLevelPath;
+              // TODO: Should probably relativize the targets relative to the locations
+              console.log("  Add symlink: ", symlinkLocation, " to ", symlinkTarget);
+              // await fs.symlink(symlinkLocation, symlinkTarget);
+              copyQueue.push({src: symlinkTarget, dest: symlinkLocation, type: "symlink"})
+            }
+            // fs.copy(src, dest, reporter);
+            // fs.symlink(src, dest);
+          } else {
+            // Put in the project folder directly
+            console.log("Should be copying directly into ", projectsUsingThis[0], " for ", depFolderType);
+            console.log("  Original location(s) might be:");
+            const projectName = projectsUsingThis[0];
+            const projectLoc = workspaceLayout.getWorkspaceManifest(projectName).loc;
+
+            for (const hoistManifest of hoistManifests) {
+              const copySrc = hoistManifest.loc;
+              console.log("    ", copySrc);
+              // console.log("   full hoist manifest: ", hoistManifest);
+              let copyDest = projectLoc;
+              for (const part of hoistManifest.parts) {
+                copyDest = copyDest + "/node_modules/" + part;
+              }
+              console.log("    copy to: ", copyDest);
+              // await fs.copy(copySrc, copyDest, this.config.reporter);
+              copyQueue.push({src: copySrc, dest: copyDest});
+            }
+          }
+        }
+        await fs.copyBulk(copyQueue, this.config.reporter);
         // TODO: And here we can start turning those things on their head to figure out a small number of shared dependencies
         // to use per project
+
+        // So what would it look like to have ___?
+        /*
+
+        Map from top-level folder (dependency name, or @group/name) to contents (_ and versions and all that)
+
+        Then we compare these maps across projects
+
+        */
 
         // await this.linker.init(flattenedTopLevelPatterns, workspaceLayout, {
         //   linkDuplicates: this.flags.linkDuplicates,

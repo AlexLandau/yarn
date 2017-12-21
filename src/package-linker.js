@@ -167,10 +167,13 @@ export default class PackageLinker {
 
     const copiedSrcs: Map<string, string> = new Map();
     const symlinkPaths: Map<string, string> = new Map();
+
     for (const [folder, {pkg, loc}] of flatTree) {
-      const remote = pkg._remote || {type: ''};
+      // So this section runs once per hoist manifest...
+      const remote = pkg._remote || {type: ''}; // This (hoistManifest.pkg._remote?) is important because it gives us the remote.type,
+                                                // which might be "workspace"... though I think we deal with that separately?
       const ref = pkg._reference;
-      let dest = folder;
+      let dest = folder; // e.g. the nucleus/node_modules/foobar folder
       invariant(ref, 'expected package reference');
 
       let src = loc;
