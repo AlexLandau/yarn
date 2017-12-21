@@ -781,6 +781,7 @@ export class Install {
             const topLevelPath = sharedModulesPath + "/" + hashMaybe;
             fs.mkdirp(topLevelPath);
             console.log("  Original location(s) might be:");
+            let topLevelBin = undefined;
             for (const hoistManifest of hoistManifests) {
               const copySrc = hoistManifest.loc;
               console.log("    ", copySrc);
@@ -792,6 +793,11 @@ export class Install {
               console.log("    copy to: ", copyDest);
               // await fs.copy(copySrc, copyDest, this.config.reporter);
               copyQueue.push({src: copySrc, dest: copyDest});
+
+              // Look for bins from the top-level dependency only
+              if (hoistManifest.parts.length === 1) { // might mean same thing as isDirectRequire?
+                topLevelBin = hoistManifest.pkg.bin
+              }
             }
 
             for (const projectName of projectsUsingThis) {
@@ -803,6 +809,16 @@ export class Install {
               console.log("  Add symlink: ", symlinkLocation, " to ", symlinkTarget);
               // await fs.symlink(symlinkLocation, symlinkTarget);
               copyQueue.push({src: symlinkTarget, dest: symlinkLocation, type: "symlink"})
+
+              // Add bins if they exist
+              if (topLevelBin !== undefined) {
+                for (const binName in topLevelBin) {
+                  const binLinkLocation = projectLoc + "/node_modules/.bin/" + binName;
+                  const binTarget = symlinkTarget + "/" + topLevelBin[binName];
+                  console.log(" ***** Want to link bin: from " + binLinkLocation + " to " + binTarget);
+                  copyQueue.push({src: binTarget, dest: binLinkLocation, type: "symlink"});
+                }
+              }
             }
             // fs.copy(src, dest, reporter);
             // fs.symlink(src, dest);
@@ -814,6 +830,7 @@ export class Install {
             // const projectLoc = workspaceLayout.getWorkspaceManifest(projectName).loc;
             const projectLoc = projectName === "" ? workspaceLayout.config.cwd : workspaceLayout.getWorkspaceManifest(projectName).loc;
 
+            let topLevelBin = undefined;
             for (const hoistManifest of hoistManifests) {
               const copySrc = hoistManifest.loc;
               console.log("    ", copySrc);
@@ -825,6 +842,21 @@ export class Install {
               console.log("    copy to: ", copyDest);
               // await fs.copy(copySrc, copyDest, this.config.reporter);
               copyQueue.push({src: copySrc, dest: copyDest});
+
+              // Look for bins from the top-level dependency only
+              if (hoistManifest.parts.length === 1) { // might mean same thing as isDirectRequire?
+                topLevelBin = hoistManifest.pkg.bin
+              }
+            }
+
+            // Add bins if they exist
+            if (topLevelBin !== undefined) {
+              for (const binName in topLevelBin) {
+                const binLinkLocation = projectLoc + "/node_modules/.bin/" + binName;
+                const binTarget = projectLoc + "/node_modules/" + hoistManifests[0].parts[0] + "/" + topLevelBin[binName];
+                console.log(" ***** Want to link bin: from " + binLinkLocation + " to " + binTarget);
+                copyQueue.push({src: binTarget, dest: binLinkLocation, type: "symlink"});
+              }
             }
           }
         }
