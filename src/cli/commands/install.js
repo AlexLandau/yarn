@@ -16,7 +16,7 @@ import * as fetcher from '../../package-fetcher.js';
 import PackageInstallScripts from '../../package-install-scripts.js';
 import * as compatibility from '../../package-compatibility.js';
 import PackageResolver from '../../package-resolver.js';
-import PackageLinker from '../../package-linker.js';
+import PackageLinker, { linkBin } from '../../package-linker.js';
 import {registries} from '../../registries/index.js';
 import {getExoticResolver} from '../../resolvers/index.js';
 import {clean} from './autoclean.js';
@@ -770,6 +770,7 @@ export class Install {
         const sharedModulesPath = workspaceLayout.config.cwd + "/shared_modules";
         fs.mkdirp(sharedModulesPath);
         const copyQueue = [];
+        const binLinkingQueue = [];
         for (const depFolderType in projectsUsingDepFolderType) {
           const projectsUsingThis = projectsUsingDepFolderType[depFolderType];
           const hoistManifests = hoistManifestsByDepFolderType[depFolderType];
@@ -816,7 +817,7 @@ export class Install {
                   const binLinkLocation = projectLoc + "/node_modules/.bin/" + binName;
                   const binTarget = symlinkTarget + "/" + topLevelBin[binName];
                   console.log(" ***** Want to link bin: from " + binLinkLocation + " to " + binTarget);
-                  copyQueue.push({src: binTarget, dest: binLinkLocation, type: "symlink"});
+                  binLinkingQueue.push({src: binTarget, dest: binLinkLocation/*, type: "symlink"*/});
                 }
               }
             }
@@ -855,12 +856,27 @@ export class Install {
                 const binLinkLocation = projectLoc + "/node_modules/.bin/" + binName;
                 const binTarget = projectLoc + "/node_modules/" + hoistManifests[0].parts[0] + "/" + topLevelBin[binName];
                 console.log(" ***** Want to link bin: from " + binLinkLocation + " to " + binTarget);
-                copyQueue.push({src: binTarget, dest: binLinkLocation, type: "symlink"});
+                binLinkingQueue.push({src: binTarget, dest: binLinkLocation/*, type: "symlink"*/});
               }
             }
           }
         }
+        for (const fromProject in interWorkspaceDeps) {
+          for (const toProject of interWorkspaceDeps[fromProject]) {
+            const linkLocation = workspaceLayout.workspaces[fromProject].loc + "/node_modules/" + toProject;
+            const linkTarget = workspaceLayout.workspaces[toProject].loc;
+
+            console.log("Want to make inter-project link from " + linkLocation + " to " + linkTarget);
+            copyQueue.push({src: linkTarget, dest: linkLocation, type: "symlink"});
+          }
+        }
         await fs.copyBulk(copyQueue, this.config.reporter);
+        for (const binLinkParams of binLinkingQueue) {
+          await linkBin(binLinkParams.src, binLinkParams.dest);
+        }
+
+
+
         // TODO: And here we can start turning those things on their head to figure out a small number of shared dependencies
         // to use per project
 
