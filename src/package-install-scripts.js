@@ -223,12 +223,7 @@ export default class PackageInstallScripts {
         blocked.add(startingPkg);
         return null;
       }
-      if (!installed.has(pkgDep)) {
-        if (seenManifests.has(pkgDep)) {
-          // there is a cycle here...
-          return pkgDep;
-        }
-
+      if (!installed.has(pkgDep) && !seenManifests.has(pkgDep)) {
         return this.choosePackageToInstall(pkgDep, beingInstalled, blocked, installed, seenManifests);
       }
     }
