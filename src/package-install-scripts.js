@@ -209,30 +209,6 @@ export default class PackageInstallScripts {
     await this.install(cmds, pkg, spinner);
   }
 
-  // detect if there is a circularDependency in the dependency tree
-  detectCircularDependencies(root: Manifest, seenManifests: Set<Manifest>, pkg: Manifest): boolean {
-    const ref = pkg._reference;
-    invariant(ref, 'expected reference');
-
-    const deps = ref.dependencies;
-    for (const dep of deps) {
-      const pkgDep = this.resolver.getStrictResolvedPattern(dep);
-      if (seenManifests.has(pkgDep)) {
-        // there is a cycle but not with the root
-        continue;
-      }
-      seenManifests.add(pkgDep);
-      // found a dependency pointing to root
-      if (pkgDep == root) {
-        return true;
-      }
-      if (this.detectCircularDependencies(root, seenManifests, pkgDep)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   // return the package itself if it's ready to install, one of its dependencies if necessary, or null if installation is blocked
   choosePackageToInstall(startingPkg: Manifest, beingInstalled: Set<Manifest>, blocked: Set<Manifest>, installed: Set<Manifest>, seenManifests: Set<Manifest>): ?Manifest {
     const ref = startingPkg._reference;
@@ -241,45 +217,34 @@ export default class PackageInstallScripts {
 
     seenManifests.add(startingPkg);
 
-    console.log("Number of deps: ", deps.length);
     for (const dep of deps) {
       const pkgDep = this.resolver.getStrictResolvedPattern(dep);
       if (beingInstalled.has(pkgDep) || blocked.has(pkgDep)) {
-        console.log("Blocked on dependency ", dep);
         blocked.add(startingPkg);
         return null;
       }
       if (!installed.has(pkgDep)) {
-        console.log("Unfulfilled dependency of ", startingPkg.name, startingPkg.version, " is ", dep);
         if (seenManifests.has(pkgDep)) {
           // there is a cycle here...
-          console.log("Resolving the cycle by returning ", pkgDep.name, pkgDep.version);
           return pkgDep;
         }
 
-        console.log("Recursing");
         return this.choosePackageToInstall(pkgDep, beingInstalled, blocked, installed, seenManifests);
       }
     }
 
-    console.log("Returning the starting package ", startingPkg.name, startingPkg.version);
     return startingPkg;
   }
 
   // find the next package to be installed
   findInstallablePackage(workQueue: Set<Manifest>, beingInstalled: Set<Manifest>, blocked: Set<Manifest>, installed: Set<Manifest>): ?Manifest {
-    console.log("Running findInstallablePackage, workQueue has length: ", workQueue.size);
-    console.log("Installed: ", installed.size, "Installing: ", beingInstalled.size, "Blocked: ", blocked.size);
-
     for (const pkg of workQueue) {
       if (!blocked.has(pkg)) {
-        console.log("Examining ", pkg.name, pkg.version);
         const pkgToInstall = this.choosePackageToInstall(pkg, beingInstalled, blocked, installed, new Set());
+
         if (pkgToInstall == null) {
-          console.log("Marking as blocked ", pkg.name, pkg.version);
           blocked.add(pkg);
         } else {
-          console.log("Returning ", pkgToInstall.name, pkgToInstall.version);
           return pkgToInstall;
         }
       }
