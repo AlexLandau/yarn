@@ -233,30 +233,14 @@ export default class PackageInstallScripts {
     return false;
   }
 
-  // Okay, I think we can do better if we apply both the following lines of reasoning:
-  // 1) Consider all our dependencies as being in one of three categories:
-  //    a) Already installed dependencies
-  //    b) Dependencies we've already seen in the chain (i.e. circular dependencies)
-  //    c) Dependencies we haven't seen and that haven't been installed
-  // 2) If all dependencies are in category A, install this package.
-  // 3) If all dependencies are in categories A or B, install this package with some regrets.
-  // 4) If we have any dependencies in category C, recurse on that package instead.
-  // That translates into looking at individual packages as follows:
-  // 1) If we're looking at a package that hasn't been seen or installed, recurse on that.
-  // 2) Otherwise, if we don't see any packages in category C, return this package. Maybe try to notice
-  //    if we saw anything in category B.
-
-  // Take 2, with new categories:
-  // 1) Our dependencies may now be in additional categories "beingInstalled" and "blocked". If any
-  //    of our dependencies are in this category, we ourselves become blocked.
-  findInstallablePackage2(startingPkg: Manifest, beingInstalled: Set<Manifest>, blocked: Set<Manifest>, installed: Set<Manifest>, seenManifests: Set<Manifest>): ?Manifest {
+  // return the package itself if it's ready to install, one of its dependencies if necessary, or null if installation is blocked
+  choosePackageToInstall(startingPkg: Manifest, beingInstalled: Set<Manifest>, blocked: Set<Manifest>, installed: Set<Manifest>, seenManifests: Set<Manifest>): ?Manifest {
     const ref = startingPkg._reference;
     invariant(ref, 'expected reference');
     const deps = ref.dependencies;
 
     seenManifests.add(startingPkg);
 
-    let dependenciesFulfilled = true;
     console.log("Number of deps: ", deps.length);
     for (const dep of deps) {
       const pkgDep = this.resolver.getStrictResolvedPattern(dep);
@@ -267,20 +251,15 @@ export default class PackageInstallScripts {
       }
       if (!installed.has(pkgDep)) {
         console.log("Unfulfilled dependency of ", startingPkg.name, startingPkg.version, " is ", dep);
-        dependenciesFulfilled = false;
-        // break;
         if (seenManifests.has(pkgDep)) {
           // there is a cycle here...
+          console.log("Resolving the cycle by returning ", pkgDep.name, pkgDep.version);
           return pkgDep;
         }
 
         console.log("Recursing");
-        return this.findInstallablePackage2(pkgDep, beingInstalled, blocked, installed, seenManifests);
+        return this.choosePackageToInstall(pkgDep, beingInstalled, blocked, installed, seenManifests);
       }
-    }
-
-    if (!dependenciesFulfilled) {
-      throw new Error("Huh?");
     }
 
     console.log("Returning the starting package ", startingPkg.name, startingPkg.version);
@@ -295,7 +274,7 @@ export default class PackageInstallScripts {
     for (const pkg of workQueue) {
       if (!blocked.has(pkg)) {
         console.log("Examining ", pkg.name, pkg.version);
-        const pkgToInstall = this.findInstallablePackage2(pkg, beingInstalled, blocked, installed, new Set());
+        const pkgToInstall = this.choosePackageToInstall(pkg, beingInstalled, blocked, installed, new Set());
         if (pkgToInstall == null) {
           console.log("Marking as blocked ", pkg.name, pkg.version);
           blocked.add(pkg);
