@@ -14,7 +14,6 @@ import {packWithIgnoreAndHeaders} from './cli/commands/pack.js';
 const fs = require('fs');
 const invariant = require('invariant');
 const path = require('path');
-const process = require('process');
 
 const INSTALL_STAGES = ['preinstall', 'install', 'postinstall'];
 
@@ -132,8 +131,6 @@ export default class PackageInstallScripts {
 
     try {
       for (const [stage, cmd] of cmds) {
-        // console.log("About to await Promise.all for stage " + stage + " and cmd " + cmd + " with locs " + locs);
-        // const startTime = process.hrtime();
         await Promise.all(
           locs.map(async loc => {
             const {stdout} = await executeLifecycleScript({
@@ -147,8 +144,6 @@ export default class PackageInstallScripts {
             this.reporter.verbose(stdout);
           }),
         );
-        // const elapsed = process.hrtime(startTime)[0];
-        // console.log(elapsed + " s: Done awaiting Promise.all for stage " + stage + " and cmd " + cmd + " with locs " + locs);
       }
     } catch (err) {
       err.message = `${locs.join(', ')}: ${err.message}`;
@@ -276,45 +271,12 @@ export default class PackageInstallScripts {
     console.log("Running findInstallablePackage, workQueue has length: ", workQueue.size);
     console.log("And installed has length: ", installed.size);
 
-    let dcdCount = 0;
-
     for (const pkg of workQueue) {
-      const ref = pkg._reference;
-      invariant(ref, 'expected reference');
-      // const deps = ref.dependencies;
-
       console.log("Examining ", pkg.name);
       const pkgToInstall = this.findInstallablePackage2(pkg, installed, new Set());
       console.log("Returning ", pkgToInstall.name);
       return pkgToInstall;
-
-      // let dependenciesFulfilled = true;
-      // for (const dep of deps) {
-      //   const pkgDep = this.resolver.getStrictResolvedPattern(dep);
-      //   if (!installed.has(pkgDep)) {
-      //     console.log("Unfulfilled dependency of ", pkg.name, " is ", dep);
-      //     dependenciesFulfilled = false;
-      //     break;
-      //   }
-      // }
-
-      // // all dependencies are installed
-      // if (dependenciesFulfilled) {
-      //   console.log("Returning ", pkg.name);
-      //   console.log("Number of detectCircularDependencies runs in this iteration: " + dcdCount);
-      //   return pkg;
-      // }
-
-      // // detect circular dependency, mark this pkg as installable to break the circle
-      // console.log("About to run detectCircularDependencies on ", pkg.name);
-      // dcdCount++;
-      // if (this.detectCircularDependencies(pkg, new Set(), pkg)) {
-      //   console.log("Detected circular dependencies in ", pkg.name);
-      //   console.log("Number of detectCircularDependencies runs in this iteration: " + dcdCount);
-      //   return pkg;
-      // }
     }
-    // console.log("Number of detectCircularDependencies runs in this iteration: " + dcdCount);
     return null;
   }
 
