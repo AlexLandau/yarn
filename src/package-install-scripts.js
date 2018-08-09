@@ -233,7 +233,23 @@ export default class PackageInstallScripts {
     return false;
   }
 
-  findInstallablePackage2(startingPkg: Manifest, installed: Set<Manifest>, seenManifests: Set<Manifest>): ?Manifest {
+  // Okay, I think we can do better if we apply both the following lines of reasoning:
+  // 1) Consider all our dependencies as being in one of three categories:
+  //    a) Already installed dependencies
+  //    b) Dependencies we've already seen in the chain (i.e. circular dependencies)
+  //    c) Dependencies we haven't seen and that haven't been installed
+  // 2) If all dependencies are in category A, install this package.
+  // 3) If all dependencies are in categories A or B, install this package with some regrets.
+  // 4) If we have any dependencies in category C, recurse on that package instead.
+  // That translates into looking at individual packages as follows:
+  // 1) If we're looking at a package that hasn't been seen or installed, recurse on that.
+  // 2) Otherwise, if we don't see any packages in category C, return this package. Maybe try to notice
+  //    if we saw anything in category B.
+
+  // Take 2, with new categories:
+  // 1) Our dependencies may now be in additional categories "beingInstalled" and "blocked". If any
+  //    of our dependencies are in this category, we ourselves become blocked.
+  findInstallablePackage2(startingPkg: Manifest, beingInstalled: Set<Manifest>, blocked: Set<Manifest>, installed: Set<Manifest>, seenManifests: Set<Manifest>): ?Manifest {
     const ref = startingPkg._reference;
     invariant(ref, 'expected reference');
     const deps = ref.dependencies;
@@ -244,8 +260,13 @@ export default class PackageInstallScripts {
     console.log("Number of deps: ", deps.length);
     for (const dep of deps) {
       const pkgDep = this.resolver.getStrictResolvedPattern(dep);
+      if (beingInstalled.has(pkgDep) || blocked.has(pkgDep)) {
+        console.log("Blocked on dependency ", dep);
+        blocked.add(startingPkg);
+        return null;
+      }
       if (!installed.has(pkgDep)) {
-        console.log("Unfulfilled dependency of ", startingPkg.name, " is ", dep);
+        console.log("Unfulfilled dependency of ", startingPkg.name, startingPkg.version, " is ", dep);
         dependenciesFulfilled = false;
         // break;
         if (seenManifests.has(pkgDep)) {
@@ -254,7 +275,7 @@ export default class PackageInstallScripts {
         }
 
         console.log("Recursing");
-        return this.findInstallablePackage2(pkgDep, installed, seenManifests);
+        return this.findInstallablePackage2(pkgDep, beingInstalled, blocked, installed, seenManifests);
       }
     }
 
@@ -262,20 +283,27 @@ export default class PackageInstallScripts {
       throw new Error("Huh?");
     }
 
-    console.log("Returning the starting package ", startingPkg.name);
+    console.log("Returning the starting package ", startingPkg.name, startingPkg.version);
     return startingPkg;
   }
 
   // find the next package to be installed
-  findInstallablePackage(workQueue: Set<Manifest>, installed: Set<Manifest>): ?Manifest {
+  findInstallablePackage(workQueue: Set<Manifest>, beingInstalled: Set<Manifest>, blocked: Set<Manifest>, installed: Set<Manifest>): ?Manifest {
     console.log("Running findInstallablePackage, workQueue has length: ", workQueue.size);
-    console.log("And installed has length: ", installed.size);
+    console.log("Installed: ", installed.size, "Installing: ", beingInstalled.size, "Blocked: ", blocked.size);
 
     for (const pkg of workQueue) {
-      console.log("Examining ", pkg.name);
-      const pkgToInstall = this.findInstallablePackage2(pkg, installed, new Set());
-      console.log("Returning ", pkgToInstall.name);
-      return pkgToInstall;
+      if (!blocked.has(pkg)) {
+        console.log("Examining ", pkg.name, pkg.version);
+        const pkgToInstall = this.findInstallablePackage2(pkg, beingInstalled, blocked, installed, new Set());
+        if (pkgToInstall == null) {
+          console.log("Marking as blocked ", pkg.name, pkg.version);
+          blocked.add(pkg);
+        } else {
+          console.log("Returning ", pkgToInstall.name, pkgToInstall.version);
+          return pkgToInstall;
+        }
+      }
     }
     return null;
   }
@@ -283,12 +311,14 @@ export default class PackageInstallScripts {
   async worker(
     spinner: ReporterSetSpinner,
     workQueue: Set<Manifest>,
+    beingInstalled: Set<Manifest>,
+    blocked: Set<Manifest>,
     installed: Set<Manifest>,
     waitQueue: Set<() => void>,
   ): Promise<void> {
     while (workQueue.size > 0) {
       // find a installable package
-      const pkg = this.findInstallablePackage(workQueue, installed);
+      const pkg = this.findInstallablePackage(workQueue, beingInstalled, blocked, installed);
 
       // can't find a package to install, register into waitQueue
       if (pkg == null) {
@@ -300,7 +330,10 @@ export default class PackageInstallScripts {
       // found a package to install
       workQueue.delete(pkg);
       if (this.packageCanBeInstalled(pkg)) {
+        beingInstalled.add(pkg);
         await this.runCommand(spinner, pkg);
+        beingInstalled.delete(pkg);
+        blocked.clear();
       }
       installed.add(pkg);
       for (const workerResolve of waitQueue) {
@@ -312,6 +345,8 @@ export default class PackageInstallScripts {
 
   async init(seedPatterns: Array<string>): Promise<void> {
     const workQueue = new Set();
+    const beingInstalled = new Set();
+    const blocked = new Set();
     const installed = new Set();
     const pkgs = this.resolver.getTopologicalManifests(seedPatterns);
     let installablePkgs = 0;
@@ -336,7 +371,7 @@ export default class PackageInstallScripts {
     // waitQueue acts like a semaphore to allow workers to register to be notified
     // when there are more work added to the work queue
     const waitQueue = new Set();
-    await Promise.all(set.spinners.map(spinner => this.worker(spinner, workQueue, installed, waitQueue)));
+    await Promise.all(set.spinners.map(spinner => this.worker(spinner, workQueue, beingInstalled, blocked, installed, waitQueue)));
     // generate built package as prebuilt one for offline mirror
     const offlineMirrorPath = this.config.getOfflineMirrorPath();
     if (this.config.packBuiltPackages && offlineMirrorPath) {
