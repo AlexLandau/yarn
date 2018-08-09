@@ -10,6 +10,7 @@ import {fixCmdWinSlashes} from './fix-cmd-win-slashes.js';
 import {getBinFolder as getGlobalBinFolder, run as globalRun} from '../cli/commands/global.js';
 
 const path = require('path');
+const process = require('process');
 
 export type LifecycleReturn = Promise<{
   cwd: string,
@@ -221,7 +222,11 @@ export async function executeLifecycleScript({
   }
 
   const shell = customShell || true;
+  // console.log("About to run spawn for command " + JSON.stringify(cmd) + " with cwd " + cwd);
+  // const startTime = process.hrtime();
   const stdout = await child.spawn(cmd, [], {cwd, env, stdio, detached, shell}, onProgress);
+  // const elapsed = process.hrtime(startTime)[0];
+  // console.log(elapsed + " s: Finished running spawn for command " + JSON.stringify(cmd) + " with cwd " + cwd);
 
   return {cwd, command: cmd, stdout};
 }

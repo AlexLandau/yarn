@@ -8,7 +8,7 @@ import {promisify} from './promise.js';
 
 const child = require('child_process');
 
-export const queue = new BlockingQueue('child', constants.CHILD_CONCURRENCY);
+export const queue = new BlockingQueue('child', 1);
 
 // TODO: this uid check is kinda whack
 let uid = 0;
@@ -69,6 +69,9 @@ export function spawn(
     key,
     (): Promise<string> =>
       new Promise((resolve, reject) => {
+        console.log("About to run spawn for command " + program + " with cwd " + opts.cwd);
+        const startTime = process.hrtime();
+
         const proc = child.spawn(program, args, opts);
         spawnedProcesses[key] = proc;
 
@@ -87,6 +90,8 @@ export function spawn(
         });
 
         function updateStdout(chunk: string) {
+          // const elapsed = process.hrtime(startTime)[0];
+          // console.log("    " + elapsed + " s output: " + chunk);
           stdout += chunk;
           if (onData) {
             onData(chunk);
@@ -94,10 +99,15 @@ export function spawn(
         }
 
         function finish() {
+          const elapsed = process.hrtime(startTime)[0];
+          console.log(elapsed + " s: Finished running spawn for command " + program + " with cwd " + opts.cwd);
+
           delete spawnedProcesses[key];
           if (err) {
             reject(err);
           } else {
+            // console.log("stdout for command " + program + " with cwd " + opts.cwd + ":");
+            // console.log(stdout.trim());
             resolve(stdout.trim());
           }
         }
