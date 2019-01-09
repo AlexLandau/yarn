@@ -14,6 +14,7 @@ import {packWithIgnoreAndHeaders} from './cli/commands/pack.js';
 const fs = require('fs');
 const invariant = require('invariant');
 const path = require('path');
+const process = require('process');
 
 const INSTALL_STAGES = ['preinstall', 'install', 'postinstall'];
 
@@ -235,29 +236,37 @@ export default class PackageInstallScripts {
 
   // find the next package to be installed
   findInstallablePackage(workQueue: Set<Manifest>, installed: Set<Manifest>): ?Manifest {
-    for (const pkg of workQueue) {
-      const ref = pkg._reference;
-      invariant(ref, 'expected reference');
-      const deps = ref.dependencies;
+    console.log("Running findInstallablePackage, workQueue has length: ", workQueue.size);
+    console.log("And installed has length: ", installed.size);
+    let numDCCCalls = 0;
+    try {
+      for (const pkg of workQueue) {
+        const ref = pkg._reference;
+        invariant(ref, 'expected reference');
+        const deps = ref.dependencies;
 
-      let dependenciesFulfilled = true;
-      for (const dep of deps) {
-        const pkgDep = this.resolver.getStrictResolvedPattern(dep);
-        if (!installed.has(pkgDep)) {
-          dependenciesFulfilled = false;
-          break;
+        let dependenciesFulfilled = true;
+        for (const dep of deps) {
+          const pkgDep = this.resolver.getStrictResolvedPattern(dep);
+          if (!installed.has(pkgDep)) {
+            dependenciesFulfilled = false;
+            break;
+          }
+        }
+
+        // all dependencies are installed
+        if (dependenciesFulfilled) {
+          return pkg;
+        }
+
+        // detect circular dependency, mark this pkg as installable to break the circle
+        numDCCCalls++;
+        if (this.detectCircularDependencies(pkg, new Set(), pkg)) {
+          return pkg;
         }
       }
-
-      // all dependencies are installed
-      if (dependenciesFulfilled) {
-        return pkg;
-      }
-
-      // detect circular dependency, mark this pkg as installable to break the circle
-      if (this.detectCircularDependencies(pkg, new Set(), pkg)) {
-        return pkg;
-      }
+    } finally {
+      console.log("Number of DCC calls this invocation: " + numDCCCalls);
     }
     return null;
   }
@@ -268,6 +277,7 @@ export default class PackageInstallScripts {
     installed: Set<Manifest>,
     waitQueue: Set<() => void>,
   ): Promise<void> {
+    const startTime = process.hrtime();
     while (workQueue.size > 0) {
       // find a installable package
       const pkg = this.findInstallablePackage(workQueue, installed);
@@ -290,6 +300,8 @@ export default class PackageInstallScripts {
       }
       waitQueue.clear();
     }
+    const elapsed = process.hrtime(startTime)[0];
+    console.log("Time spent running the package-install-scripts worker: " + elapsed + " s");
   }
 
   async init(seedPatterns: Array<string>): Promise<void> {
