@@ -239,6 +239,8 @@ export default class PackageInstallScripts {
     console.log("Running findInstallablePackage, workQueue has length: ", workQueue.size);
     console.log("And installed has length: ", installed.size);
     let numDCCCalls = 0;
+    let longestDccCallTime = 0;
+    let sumOfDccCallTimes = 0;
     try {
       for (const pkg of workQueue) {
         const ref = pkg._reference;
@@ -261,12 +263,22 @@ export default class PackageInstallScripts {
 
         // detect circular dependency, mark this pkg as installable to break the circle
         numDCCCalls++;
-        if (this.detectCircularDependencies(pkg, new Set(), pkg)) {
-          return pkg;
+        const dccStartTime = process.hrtime();
+        try {
+          if (this.detectCircularDependencies(pkg, new Set(), pkg)) {
+            return pkg;
+          }
+        } finally {
+          const dccTimeElapsed = process.hrtime(dccStartTime);
+          const dccTimeMillis = dccTimeElapsed[0] * 1000 + dccTimeElapsed[1] / 1e6;
+          if (dccTimeMillis > longestDccCallTime) {
+            longestDccCallTime = dccTimeMillis;
+          }
+          sumOfDccCallTimes += dccTimeMillis;
         }
       }
     } finally {
-      console.log("Number of DCC calls this invocation: " + numDCCCalls);
+      console.log(`Number of DCC calls this invocation: ${numDCCCalls}; longest: ${longestDccCallTime} ms; total time: ${sumOfDccCallTimes} ms`);
     }
     return null;
   }
